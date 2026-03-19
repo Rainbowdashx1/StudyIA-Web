@@ -1,7 +1,207 @@
 ﻿@page "/"
 
-<PageTitle>Home</PageTitle>
+<PageTitle>StudyIA</PageTitle>
 
-<h1>Hello, world!</h1>
+@* ── Main two-panel layout ── *@
+<div class="flex h-screen overflow-hidden bg-white select-none">
 
-Welcome to your new app.
+    @* ── LEFT PANEL: Temarios list ── *@
+    <div class="flex flex-col w-56 min-w-40 shrink-0 border-r border-gray-300">
+
+        @* Header *@
+        <div class="bg-gray-200 border-b border-gray-300 px-3 py-2">
+            <span class="font-semibold text-sm">📚&nbsp; Temarios</span>
+        </div>
+
+        @* List *@
+        <div class="flex-1 overflow-y-auto">
+            @if (temarios.Count == 0)
+            {
+                <p class="p-4 text-gray-400 text-sm text-center">Sin temarios</p>
+            }
+            @foreach (var temario in temarios)
+            {
+                <div class="px-2 py-2 cursor-pointer border-b border-gray-100
+                            @(selectedTemario == temario ? "bg-blue-100" : "hover:bg-gray-50")"
+                     @onclick="() => OnTemarioSelected(temario)">
+                    <div class="font-semibold text-sm truncate">@temario.Name</div>
+                    <div class="text-xs text-gray-400 truncate">@temario.FolderPath</div>
+                </div>
+            }
+        </div>
+
+        @* Footer buttons *@
+        <div class="bg-gray-100 border-t border-gray-300 px-2 py-2 flex gap-2">
+            <button class="flex-1 h-7 text-xs border border-gray-300 rounded bg-white
+                           hover:bg-gray-50 transition-colors"
+                    @onclick="OnAddFolder">
+                ＋ Añadir
+            </button>
+            <button class="flex-1 h-7 text-xs border border-gray-300 rounded bg-white
+                           hover:bg-gray-50 transition-colors
+                           disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled="@(selectedTemario == null)"
+                    @onclick="OnRemoveFolder">
+                🗑 Eliminar
+            </button>
+        </div>
+
+    </div>
+
+    @* Visual divider *@
+    <div class="w-px bg-gray-300 shrink-0"></div>
+
+    @* ── RIGHT PANEL ── *@
+    <div class="flex flex-col flex-1 overflow-hidden">
+
+        @* Toolbar *@
+        <div class="bg-gray-100 border-b border-gray-300 px-3 py-2 flex items-center gap-2 flex-wrap">
+
+            <span class="font-semibold text-gray-500 text-sm truncate max-w-xs mr-1">
+                @(selectedTemario != null ? selectedTemario.Name : "← Selecciona o añade un temario")
+            </span>
+
+            <button class="h-8 px-3 text-sm font-semibold text-white bg-blue-600
+                           hover:bg-blue-700 rounded transition-colors
+                           disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled="@(selectedTemario == null)"
+                    @onclick="OnScan">
+                🔄&nbsp; Escanear
+            </button>
+
+            <button class="h-8 px-3 text-sm border border-gray-300 rounded bg-white
+                           hover:bg-gray-50 transition-colors
+                           disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled="@(selectedTemario == null)"
+                    @onclick="OnOpenQuestions">
+                📝&nbsp; Preguntas
+            </button>
+
+            <button class="h-8 px-3 text-sm font-semibold text-white bg-green-700
+                           hover:bg-green-800 rounded transition-colors
+                           disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled="@(selectedTemario == null)"
+                    @onclick="OnPractice">
+                ▶&nbsp; Practicar
+            </button>
+
+        </div>
+
+        @* PDF list area *@
+        <div class="flex-1 overflow-auto relative">
+            @if (selectedTemario == null || pdfFiles.Count == 0)
+            {
+                <div class="absolute inset-0 flex items-center justify-center">
+                    <p class="text-gray-400 text-sm max-w-sm text-center px-4">
+                        Selecciona un temario para ver sus archivos PDF.
+                    </p>
+                </div>
+            }
+            else
+            {
+                <table class="w-full text-sm border-collapse">
+                    <thead class="bg-gray-50 sticky top-0 shadow-sm">
+                        <tr>
+                            <th class="text-left px-3 py-2 text-xs font-semibold text-gray-600
+                                       uppercase tracking-wide border-b border-gray-200">
+                                Archivo
+                            </th>
+                            <th class="text-left px-3 py-2 text-xs font-semibold text-gray-600
+                                       uppercase tracking-wide border-b border-gray-200 w-28">
+                                Estado
+                            </th>
+                            <th class="text-left px-3 py-2 text-xs font-semibold text-gray-600
+                                       uppercase tracking-wide border-b border-gray-200 w-24">
+                                Tamaño
+                            </th>
+                            <th class="text-left px-3 py-2 text-xs font-semibold text-gray-600
+                                       uppercase tracking-wide border-b border-gray-200 w-28">
+                                SHA-256
+                            </th>
+                            <th class="text-left px-3 py-2 text-xs font-semibold text-gray-600
+                                       uppercase tracking-wide border-b border-gray-200 w-36">
+                                Último scan
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var (pdf, idx) in pdfFiles.Select((p, i) => (p, i)))
+                        {
+                            <tr class="@(idx % 2 == 0 ? "bg-white" : "bg-gray-50") hover:bg-blue-50 transition-colors cursor-default">
+                                <td class="px-3 py-2 border-b border-gray-100">@pdf.FileName</td>
+                                <td class="px-3 py-2 border-b border-gray-100">@pdf.Status</td>
+                                <td class="px-3 py-2 border-b border-gray-100">@pdf.FileSizeDisplay</td>
+                                <td class="px-3 py-2 border-b border-gray-100 font-mono text-xs">@pdf.HashShort</td>
+                                <td class="px-3 py-2 border-b border-gray-100">@pdf.LastSeenDisplay</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </div>
+
+        @* Status bar *@
+        <div class="bg-gray-100 border-t border-gray-300 px-3 py-1.5 flex items-center justify-between">
+            <span class="text-xs text-gray-500">@statusText</span>
+            @if (isScanning)
+            {
+                <div class="w-40 h-2 bg-gray-200 rounded-full overflow-hidden">
+                    <div class="h-full bg-blue-500 rounded-full animate-pulse"></div>
+                </div>
+            }
+        </div>
+
+    </div>
+
+</div>
+
+@* Modal de preguntas *@
+@if (showQuestionsModal)
+{
+    <GenerateQuestionsModal SelectedTemario="selectedTemario"
+                            OnClose="OnQuestionsModalClose" />
+}
+
+@code {
+    private List<TemarioModel> temarios = new();
+    private TemarioModel? selectedTemario;
+    private List<PdfFileModel> pdfFiles = new();
+    private string statusText = "Listo";
+    private bool isScanning = false;
+    private bool showQuestionsModal = false;
+
+    private void OnTemarioSelected(TemarioModel temario)
+    {
+        // TODO: Set selectedTemario and load PDF files for the selected folder
+    }
+
+    private void OnAddFolder()
+    {
+        // TODO: Open folder picker and add a new TemarioModel to the list
+    }
+
+    private void OnRemoveFolder()
+    {
+        // TODO: Remove selectedTemario from the list
+    }
+
+    private void OnScan()
+    {
+        // TODO: Scan the selected folder for PDF files and update pdfFiles
+    }
+
+    private void OnOpenQuestions()
+    {
+        showQuestionsModal = true;
+    }
+
+    private void OnPractice()
+    {
+        // TODO: Start a practice session for the selected temario
+    }
+
+    private void OnQuestionsModalClose()
+    {
+        showQuestionsModal = false;
+    }
+}

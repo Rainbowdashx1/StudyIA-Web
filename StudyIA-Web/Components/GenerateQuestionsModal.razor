@@ -1,0 +1,155 @@
+@* Modal: Generar preguntas de evaluación — mirrors GenerateQuestionsWindow.xaml *@
+
+<div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
+     @onclick="HandleBackdropClick">
+
+    <div class="bg-white rounded-lg shadow-2xl w-full max-w-2xl mx-4 max-h-[90vh] flex flex-col"
+         @onclick:stopPropagation>
+
+        @* Header *@
+        <div class="flex items-center justify-between border-b border-gray-200 px-5 py-3">
+            <h2 class="font-semibold text-base">Generar preguntas de evaluación</h2>
+            <button class="text-gray-400 hover:text-gray-600 transition-colors text-lg leading-none"
+                    @onclick="OnClose">✕</button>
+        </div>
+
+        @* Scrollable body *@
+        <div class="flex-1 overflow-y-auto p-5 space-y-5">
+
+            @* Token section *@
+            <div>
+                <label class="block font-semibold text-sm mb-1.5">
+                    Token de GitHub (PAT con acceso a GitHub Models):
+                </label>
+                <div class="flex gap-2">
+                    <input type="text"
+                           @bind="tokenValue"
+                           placeholder="ghp_..."
+                           title="GitHub PAT → github.com/settings/tokens → Generate new token (classic). No necesita permisos especiales."
+                           class="flex-1 h-8 border border-gray-300 rounded px-3 text-sm font-mono
+                                  focus:outline-none focus:ring-2 focus:ring-blue-300" />
+                    <button class="h-8 w-20 text-sm border border-gray-300 rounded bg-white
+                                   hover:bg-gray-50 transition-colors"
+                            @onclick="OnSaveToken">
+                        Guardar
+                    </button>
+                </div>
+                <p class="text-xs text-gray-500 mt-1 min-h-4">@tokenStatus</p>
+            </div>
+
+            @* Files table *@
+            <div>
+                <p class="font-semibold text-sm mb-2">
+                    Archivos PDF en la carpeta y preguntas existentes:
+                </p>
+                <div class="border border-gray-300 rounded overflow-hidden">
+                    <table class="w-full text-sm border-collapse">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="text-left px-3 py-2 text-xs font-semibold text-gray-600
+                                           uppercase tracking-wide border-b border-gray-200">
+                                    Archivo
+                                </th>
+                                <th class="text-left px-3 py-2 text-xs font-semibold text-gray-600
+                                           uppercase tracking-wide border-b border-gray-200 w-36">
+                                    Preguntas
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (modalFiles.Count == 0)
+                            {
+                                <tr>
+                                    <td colspan="2" class="px-3 py-4 text-center text-gray-400 text-sm">
+                                        Sin archivos
+                                    </td>
+                                </tr>
+                            }
+                            @foreach (var (file, idx) in modalFiles.Select((f, i) => (f, i)))
+                            {
+                                <tr class="@(idx % 2 == 0 ? "bg-white" : "bg-gray-50") hover:bg-blue-50 transition-colors">
+                                    <td class="px-3 py-2 border-b border-gray-100">@file.FileName</td>
+                                    <td class="px-3 py-2 border-b border-gray-100">@file.CountDisplay</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            @* Summary *@
+            <p class="text-xs text-gray-500 min-h-4">@existingText</p>
+
+            @* Progress *@
+            <div class="space-y-1.5">
+                @if (isGenerating)
+                {
+                    <div class="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+                        <div class="h-full bg-green-600 rounded-full transition-all duration-300"
+                             style="width: @(genProgress)%">
+                        </div>
+                    </div>
+                }
+                <p class="text-xs text-gray-500 min-h-4">@genStatus</p>
+            </div>
+
+        </div>
+
+        @* Footer buttons *@
+        <div class="border-t border-gray-200 px-5 py-3 flex justify-end gap-2">
+            @if (isGenerating)
+            {
+                <button class="h-8 px-4 text-sm border border-gray-300 rounded bg-white
+                               hover:bg-gray-50 transition-colors"
+                        @onclick="OnCancelGeneration">
+                    Cancelar generación
+                </button>
+            }
+            <button class="h-8 px-4 text-sm font-semibold text-white bg-green-700
+                           hover:bg-green-800 rounded transition-colors"
+                    title="Detecta automáticamente las secciones del PDF e infiere cuántas preguntas generar por cada una."
+                    @onclick="OnGenerateByOutline">
+                🗂&nbsp; Por secciones (exp.)
+            </button>
+            <button class="h-8 w-20 text-sm border border-gray-300 rounded bg-white
+                           hover:bg-gray-50 transition-colors"
+                    @onclick="OnClose">
+                Cerrar
+            </button>
+        </div>
+
+    </div>
+</div>
+
+@code {
+    [Parameter] public TemarioModel? SelectedTemario { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private string tokenValue = string.Empty;
+    private string tokenStatus = string.Empty;
+    private List<ModalPdfFileModel> modalFiles = new();
+    private string existingText = string.Empty;
+    private bool isGenerating = false;
+    private int genProgress = 0;
+    private string genStatus = string.Empty;
+
+    private async Task HandleBackdropClick()
+    {
+        await OnClose.InvokeAsync();
+    }
+
+    private void OnSaveToken()
+    {
+        // TODO: Validate and persist the GitHub PAT token
+    }
+
+    private void OnCancelGeneration()
+    {
+        // TODO: Cancel the ongoing question-generation task
+    }
+
+    private void OnGenerateByOutline()
+    {
+        // TODO: Detect PDF sections automatically and generate questions per section
+    }
+}
