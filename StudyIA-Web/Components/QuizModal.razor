@@ -1,0 +1,243 @@
+@* Modal: Evaluación (Quiz) — mirrors QuizWindow.xaml *@
+
+<div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
+     @onclick="HandleBackdropClick">
+
+    <div class="bg-white rounded-lg shadow-2xl w-full max-w-3xl mx-4 max-h-[95vh] flex flex-col"
+         @onclick:stopPropagation>
+
+        @* ── Header ── *@
+        <div class="flex items-center justify-between border-b border-gray-200 px-5 py-3 shrink-0">
+            <h2 class="font-semibold text-base">Evaluación</h2>
+            <button class="text-gray-400 hover:text-gray-600 transition-colors text-lg leading-none"
+                    @onclick="OnClose">✕</button>
+        </div>
+
+        @* ── Scrollable body ── *@
+        <div class="flex-1 overflow-y-auto px-7 py-6">
+
+            @if (!showResults)
+            {
+                @* ════════════════ QUIZ PANEL ════════════════ *@
+
+                @* Progress row *@
+                <div class="flex items-center gap-4 mb-5">
+                    <span class="text-sm text-gray-500 whitespace-nowrap shrink-0">@progressText</span>
+                    <div class="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
+                        <div class="h-full bg-blue-500 rounded-full transition-all duration-500"
+                             style="width: @(quizProgress)%"></div>
+                    </div>
+                </div>
+
+                @* Source (file + page) *@
+                <p class="text-xs text-gray-400 mb-2.5 italic">@sourceText</p>
+
+                @* Question card *@
+                <div class="bg-blue-50 border border-blue-200 rounded-lg px-5 py-4 mb-4">
+                    <p class="text-base text-gray-800 leading-7 whitespace-pre-wrap">@questionText</p>
+                </div>
+
+                @* Answer area *@
+                <div class="mb-4">
+                    <label class="block font-semibold text-sm mb-1.5">Tu respuesta:</label>
+                    <textarea @bind="answerText"
+                              @onkeydown="OnAnswerKeyDown"
+                              rows="5"
+                              placeholder="Escribe tu respuesta aquí… (Ctrl+Enter para enviar)"
+                              class="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm
+                                     resize-none focus:outline-none focus:ring-2 focus:ring-blue-300
+                                     disabled:bg-gray-50 disabled:text-gray-400"
+                              disabled="@(showFeedback || isEvaluating)"></textarea>
+                </div>
+
+                @* Submit row + evaluating indicator *@
+                <div class="flex items-center justify-end gap-3 mb-3">
+                    @if (isEvaluating)
+                    {
+                        <div class="flex items-center gap-2 text-gray-500 text-sm">
+                            <span>Evaluando…</span>
+                            <div class="w-20 h-2 bg-gray-200 rounded-full overflow-hidden">
+                                <div class="h-full bg-blue-400 rounded-full animate-pulse w-full"></div>
+                            </div>
+                        </div>
+                    }
+                    <button class="h-9 px-6 text-sm font-semibold text-white bg-blue-600
+                                   hover:bg-blue-700 rounded transition-colors
+                                   disabled:opacity-50 disabled:cursor-not-allowed"
+                            disabled="@(isEvaluating || showFeedback)"
+                            @onclick="OnAnswer">
+                        Responder &nbsp;→
+                    </button>
+                </div>
+
+                @* Feedback panel *@
+                @if (showFeedback)
+                {
+                    <div class="bg-gray-50 border border-gray-200 rounded-lg px-4 py-4 flex items-center gap-4">
+
+                        @* Score circle *@
+                        <div class="w-14 h-14 rounded-full shrink-0 flex items-center justify-center
+                                    @ScoreBadgeClass(currentScore)">
+                            <span class="text-white font-bold text-lg">@currentScore</span>
+                        </div>
+
+                        @* Feedback text *@
+                        <p class="flex-1 text-sm text-gray-700 leading-5">@feedbackText</p>
+
+                        @* Next / results button *@
+                        <button class="h-9 px-5 text-sm font-semibold text-white rounded transition-colors shrink-0
+                                       @(isLastQuestion ? "bg-green-700 hover:bg-green-800" : "bg-blue-600 hover:bg-blue-700")"
+                                @onclick="OnNext">
+                            @(isLastQuestion ? "Ver resultados" : "Siguiente →")
+                        </button>
+
+                    </div>
+                }
+            }
+            else
+            {
+                @* ════════════════ RESULTS PANEL ════════════════ *@
+
+                @* Header *@
+                <div class="mb-5">
+                    <h3 class="text-xl font-bold mb-3">✅&nbsp; Evaluación completada</h3>
+                    <div class="flex items-center gap-3">
+                        <span class="text-sm text-gray-600">Puntuación media:</span>
+                        <span class="px-5 py-1.5 rounded-full text-white font-bold text-base
+                                     @ScoreBadgeClass(averageScore)">
+                            @averageScore
+                        </span>
+                    </div>
+                </div>
+
+                @* Results table *@
+                <div class="border border-gray-300 rounded overflow-hidden mb-5">
+                    <table class="w-full text-sm border-collapse">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="text-left px-3 py-2 text-xs font-semibold text-gray-600
+                                           uppercase tracking-wide border-b border-gray-200 w-10">
+                                    #
+                                </th>
+                                <th class="text-left px-3 py-2 text-xs font-semibold text-gray-600
+                                           uppercase tracking-wide border-b border-gray-200">
+                                    Pregunta
+                                </th>
+                                <th class="text-left px-3 py-2 text-xs font-semibold text-gray-600
+                                           uppercase tracking-wide border-b border-gray-200">
+                                    Tu respuesta
+                                </th>
+                                <th class="text-left px-3 py-2 text-xs font-semibold text-gray-600
+                                           uppercase tracking-wide border-b border-gray-200 w-24">
+                                    Puntuación
+                                </th>
+                                <th class="text-left px-3 py-2 text-xs font-semibold text-gray-600
+                                           uppercase tracking-wide border-b border-gray-200 w-52">
+                                    Retroalimentación
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (quizResults.Count == 0)
+                            {
+                                <tr>
+                                    <td colspan="5" class="px-3 py-4 text-center text-gray-400">
+                                        Sin resultados
+                                    </td>
+                                </tr>
+                            }
+                            @foreach (var (result, idx) in quizResults.Select((r, i) => (r, i)))
+                            {
+                                <tr class="@(idx % 2 == 0 ? "bg-white" : "bg-gray-50") align-top">
+                                    <td class="px-3 py-3 border-b border-gray-100 text-gray-500">
+                                        @result.Number
+                                    </td>
+                                    <td class="px-3 py-3 border-b border-gray-100 max-w-[180px]">
+                                        <p class="line-clamp-2">@result.Question</p>
+                                    </td>
+                                    <td class="px-3 py-3 border-b border-gray-100 max-w-[180px]">
+                                        <p class="line-clamp-2">@result.UserAnswer</p>
+                                    </td>
+                                    <td class="px-3 py-3 border-b border-gray-100 font-semibold
+                                               @ScoreTextClass(result.Score)">
+                                        @result.ScoreDisplay
+                                    </td>
+                                    <td class="px-3 py-3 border-b border-gray-100 text-gray-600">
+                                        <p class="line-clamp-3">@result.Feedback</p>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+
+                @* Close button *@
+                <div class="flex justify-end">
+                    <button class="h-8 w-24 text-sm border border-gray-300 rounded bg-white
+                                   hover:bg-gray-50 transition-colors"
+                            @onclick="OnClose">
+                        Cerrar
+                    </button>
+                </div>
+            }
+
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public TemarioModel? SelectedTemario { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    // ── Quiz state ──
+    private bool showResults = false;
+    private string progressText = string.Empty;
+    private int quizProgress = 0;
+    private string sourceText = string.Empty;
+    private string questionText = string.Empty;
+    private string answerText = string.Empty;
+    private bool isEvaluating = false;
+    private bool showFeedback = false;
+    private int currentScore = 0;
+    private string feedbackText = string.Empty;
+    private bool isLastQuestion = false;
+
+    // ── Results state ──
+    private List<QuizResultModel> quizResults = new();
+    private int averageScore = 0;
+
+    private async Task HandleBackdropClick()
+    {
+        await OnClose.InvokeAsync();
+    }
+
+    private void OnAnswer()
+    {
+        // TODO: Send current question + answerText to AI for evaluation,
+        //       then populate currentScore, feedbackText and set showFeedback = true
+    }
+
+    private async Task OnAnswerKeyDown(KeyboardEventArgs e)
+    {
+        // TODO: Submit on Ctrl+Enter (e.CtrlKey && e.Key == "Enter")
+        await Task.CompletedTask;
+    }
+
+    private void OnNext()
+    {
+        // TODO: If isLastQuestion → set showResults = true and build quizResults list
+        //       Otherwise → advance to next question and reset answer/feedback state
+    }
+
+    // ── Helpers ──
+
+    private string ScoreBadgeClass(int score) =>
+        score >= 8 ? "bg-green-600" :
+        score >= 5 ? "bg-yellow-500" :
+                     "bg-red-500";
+
+    private string ScoreTextClass(int score) =>
+        score >= 8 ? "text-green-700" :
+        score >= 5 ? "text-yellow-600" :
+                     "text-red-600";
+}

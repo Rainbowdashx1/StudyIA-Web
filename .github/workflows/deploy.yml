@@ -1,0 +1,34 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches:
+      - master  # Se ejecuta automáticamente al hacer push
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0'  # Ajusta tu versión de .NET
+
+      - name: Publish
+        run: dotnet publish -c Release -o release --nologo
+
+      - name: Fix permissions for GitHub Pages
+        run: |
+          sed -i 's/<base href="\/" \/>/<base href="\/StudyIA-Web\/" \/>/g' release/wwwroot/index.html
+          cp release/wwwroot/index.html release/wwwroot/404.html
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: release/wwwroot

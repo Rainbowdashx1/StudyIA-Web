@@ -162,6 +162,13 @@
                             OnClose="OnQuestionsModalClose" />
 }
 
+@* Modal de evaluación (quiz) *@
+@if (showQuizModal)
+{
+    <QuizModal SelectedTemario="selectedTemario"
+               OnClose="OnQuizModalClose" />
+}
+
 @code {
     private List<TemarioModel> temarios = new();
     private TemarioModel? selectedTemario;
@@ -169,6 +176,7 @@
     private string statusText = "Listo";
     private bool isScanning = false;
     private bool showQuestionsModal = false;
+    private bool showQuizModal = false;
 
     private void OnTemarioSelected(TemarioModel temario)
     {
@@ -197,7 +205,12 @@
 
     private void OnPractice()
     {
-        // TODO: Start a practice session for the selected temario
+        showQuizModal = true;
+    }
+
+    private void OnQuizModalClose()
+    {
+        showQuizModal = false;
     }
 
     private void OnQuestionsModalClose()
