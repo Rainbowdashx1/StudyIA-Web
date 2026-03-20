@@ -12,13 +12,13 @@ public class PdfFileModel
     public PdfStatus RawStatus       { get; }
 
     public PdfFileModel(string fileName, long fileSize, string hash,
-                        PdfStatus status, string? error = null)
+                        PdfStatus status, string? error = null, DateTime? lastSeen = null)
     {
         FileName        = fileName;
         FileSizeDisplay = FormatSize(fileSize);
         HashShort       = hash.Length >= 8 ? hash[..8] + "..." : hash;
         RawStatus       = status;
-        LastSeenDisplay = DateTime.Now.ToString("dd/MM/yyyy HH:mm");
+        LastSeenDisplay = (lastSeen ?? DateTime.Now).ToString("dd/MM/yyyy HH:mm");
         Status = error is not null            ? "Error"
                : status == PdfStatus.New      ? "Nuevo"
                : status == PdfStatus.Modified ? "Modificado"

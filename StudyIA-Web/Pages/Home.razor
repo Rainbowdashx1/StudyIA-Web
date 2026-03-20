@@ -325,8 +325,22 @@
 
         if (pdfs.Count == 0)
         {
-            pdfFiles.Clear();
-            statusText = "No se encontraron archivos PDF. Selecciona la carpeta con el botón Añadir.";
+            // El <input type="file"> se resetea al recargar la página.
+            // Mostramos los registros guardados en localStorage para que el usuario
+            // vea sus PDFs aunque no haya vuelto a seleccionar la carpeta.
+            var stored = Db.GetFilesInFolder(folderPath);
+            if (stored.Count > 0)
+            {
+                pdfFiles   = stored.Select(r => new PdfFileModel(
+                                 r.FileName, r.FileSize, r.FileHash,
+                                 PdfStatus.Unchanged, lastSeen: r.LastSeen)).ToList();
+                statusText = $"{stored.Count} PDF(s) en caché · pulsa 🔄 Escanear tras seleccionar la carpeta para actualizar.";
+            }
+            else
+            {
+                pdfFiles.Clear();
+                statusText = "No se encontraron archivos PDF. Selecciona la carpeta con el botón Añadir.";
+            }
             return;
         }
 
