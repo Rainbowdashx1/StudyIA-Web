@@ -1,4 +1,6 @@
 @* Modal: Generar preguntas de evaluación — mirrors GenerateQuestionsWindow.xaml *@
+@inject AppDatabase Db
+@inject IJSRuntime JS
 
 <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
      @onclick="HandleBackdropClick">
@@ -123,33 +125,271 @@
 
 @code {
     [Parameter] public TemarioModel? SelectedTemario { get; set; }
-    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback OnClose         { get; set; }
 
-    private string tokenValue = string.Empty;
+    private string tokenValue  = string.Empty;
     private string tokenStatus = string.Empty;
-    private List<ModalPdfFileModel> modalFiles = new();
-    private string existingText = string.Empty;
-    private bool isGenerating = false;
-    private int genProgress = 0;
-    private string genStatus = string.Empty;
+
+    private List<ModalPdfFileModel> modalFiles   = new();
+    private string existingText  = string.Empty;
+    private bool   isGenerating  = false;
+    private int    genProgress   = 0;
+    private string genStatus     = string.Empty;
+
+    private CancellationTokenSource? _cts;
+
+    private const string KeyGithubToken           = "GithubToken";
+    private const int    CharBudgetPerBatch        = 28_000;
+    private const int    MaxCharsPerSectionInBatch = 12_000;
+
+    // ── Ciclo de vida ──────────────────────────────────────────────────────
+
+    protected override void OnInitialized()
+    {
+        var token = Db.GetSetting(KeyGithubToken);
+        if (!string.IsNullOrEmpty(token))
+            tokenValue = token;
+
+        RefreshFileList();
+    }
+
+    protected override void OnParametersSet() => RefreshFileList();
+
+    private void RefreshFileList()
+    {
+        if (SelectedTemario is null) return;
+
+        var summary = Db.GetQuestionSummary(SelectedTemario.FolderPath);
+        modalFiles = summary.Select(s => new ModalPdfFileModel
+        {
+            FileName     = s.FileName,
+            CountDisplay = s.Count == 0 ? "Sin preguntas" : $"{s.Count} pregunta(s)"
+        }).ToList();
+
+        var total = summary.Sum(s => s.Count);
+        existingText = $"Ya existen {total} pregunta(s) en la base de datos.";
+    }
+
+    // ── Handlers ──────────────────────────────────────────────────────────
 
     private async Task HandleBackdropClick()
     {
-        await OnClose.InvokeAsync();
+        if (!isGenerating)
+            await OnClose.InvokeAsync();
     }
 
-    private void OnSaveToken()
+    private async Task OnSaveToken()
     {
-        // TODO: Validate and persist the GitHub PAT token
+        var token = tokenValue.Trim();
+        if (string.IsNullOrEmpty(token))
+        {
+            tokenStatus = "⚠️ El token no puede estar vacío.";
+            return;
+        }
+        await Db.SetSettingAsync(KeyGithubToken, token);
+        tokenStatus = "✓ Token guardado.";
     }
 
-    private void OnCancelGeneration()
+    private void OnCancelGeneration() => _cts?.Cancel();
+
+    // ── Generación por secciones ───────────────────────────────────────────
+
+    private async Task OnGenerateByOutline()
     {
-        // TODO: Cancel the ongoing question-generation task
+        var token = tokenValue.Trim();
+        if (string.IsNullOrEmpty(token))
+        {
+            tokenStatus = "⚠️ Introduce tu token de GitHub antes de generar.";
+            return;
+        }
+        if (SelectedTemario is null) return;
+
+        var files = Db.GetFilesInFolder(SelectedTemario.FolderPath);
+        if (files.Count == 0)
+        {
+            genStatus = "No hay archivos PDF registrados. Escanea la carpeta primero.";
+            return;
+        }
+
+        _cts = new CancellationTokenSource();
+        SetGenerating(true);
+
+        try
+        {
+            var service   = new CopilotService(token);
+            var generated = 0;
+
+            for (var fi = 0; fi < files.Count; fi++)
+            {
+                if (_cts.Token.IsCancellationRequested) break;
+
+                var file = files[fi];
+                genProgress = (int)((double)fi / files.Count * 100);
+                genStatus   = $"Extrayendo secciones de {file.FileName}…";
+                StateHasChanged();
+
+                // 1. Obtener bytes del PDF desde el input del navegador
+                var base64 = await JS.InvokeAsync<string>(
+                    "folderPicker.readFileAsBase64", "folderPickerInput", file.FileName);
+                if (string.IsNullOrEmpty(base64))
+                {
+                    genStatus = $"⚠️ {file.FileName}: no se pudo leer el archivo. Vuelve a seleccionar la carpeta.";
+                    StateHasChanged();
+                    await Task.Delay(800, _cts.Token);
+                    continue;
+                }
+                var pdfBytes = Convert.FromBase64String(base64);
+
+                // 2. Obtener secciones (de caché o del PDF)
+                List<PdfSection> sections;
+                if (Db.HasSections(file.Id))
+                {
+                    sections = Db.GetSections(file.Id);
+                }
+                else
+                {
+                    sections = PdfTextService.ExtractOutline(pdfBytes);
+                    if (sections.Count == 0)
+                    {
+                        genStatus = $"⚠️ {file.FileName}: sin secciones detectadas, omitiendo.";
+                        StateHasChanged();
+                        await Task.Delay(800, _cts.Token);
+                        continue;
+                    }
+                    await Db.SaveSectionsAsync(file.Id, sections);
+                    sections = Db.GetSections(file.Id);
+                }
+
+                // 3. Extraer texto del PDF
+                genStatus = $"Extrayendo texto de {file.FileName}…";
+                StateHasChanged();
+                var allPages = PdfTextService.ExtractPages(pdfBytes);
+                if (allPages.Count == 0)
+                {
+                    genStatus = $"⚠️ {file.FileName}: sin texto extraíble (PDF escaneado), omitiendo.";
+                    StateHasChanged();
+                    await Task.Delay(800, _cts.Token);
+                    continue;
+                }
+
+                // 4. Construir secciones pendientes (las que aún no tienen preguntas)
+                var pending = new List<SectionBatchItem>();
+                foreach (var section in sections)
+                {
+                    if (Db.GetQuestionCountForSection(section.Id) > 0) continue;
+
+                    var sectionPages = allPages
+                        .Where(p => p.Page >= section.StartPage && p.Page <= section.EndPage)
+                        .ToList();
+                    if (sectionPages.Count == 0) continue;
+
+                    var toGenerate = InferQuestionCount(section.EndPage - section.StartPage + 1);
+                    var trimmed    = PdfTextService.Trim(sectionPages, MaxCharsPerSectionInBatch);
+
+                    pending.Add(new SectionBatchItem(
+                        section.Id, section.Title, section.PageRange,
+                        toGenerate, trimmed));
+                }
+
+                // 5. Agrupar en batches por presupuesto de caracteres y enviar
+                var batches = BuildSectionBatches(pending, CharBudgetPerBatch);
+                for (var bi = 0; bi < batches.Count; bi++)
+                {
+                    if (_cts.Token.IsCancellationRequested) break;
+
+                    var batch = batches[bi];
+                    genProgress = (int)((double)fi / files.Count * 100
+                                      + (double)bi / Math.Max(1, batches.Count) / files.Count * 100);
+                    genStatus = $"[{file.FileName}] Batch {bi + 1}/{batches.Count} " +
+                                $"({batch.Count} sección(es))…";
+                    StateHasChanged();
+
+                    List<SectionedQuestion> results;
+                    try
+                    {
+                        results = await service.GenerateForSectionsAsync(batch, _cts.Token);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        genStatus = $"⚠️ Error en batch {bi + 1}: {ex.Message}";
+                        StateHasChanged();
+                        await Task.Delay(1500, _cts.Token);
+                        continue;
+                    }
+
+                    foreach (var q in results)
+                    {
+                        await Db.SaveQuestionForSectionAsync(
+                            file.Id, q.SectionId, q.PageNumber,
+                            q.Context, q.QuestionText, q.ExpectedAnswer);
+                        generated++;
+                    }
+                }
+            }
+
+            genProgress = 100;
+            genStatus   = $"✅ {generated} pregunta(s) generada(s) por secciones.";
+            RefreshFileList();
+        }
+        catch (OperationCanceledException)
+        {
+            genStatus = "Generación cancelada.";
+        }
+        catch (Exception ex)
+        {
+            genStatus = $"Error inesperado: {ex.Message}";
+        }
+        finally
+        {
+            SetGenerating(false);
+            _cts?.Dispose();
+            _cts = null;
+        }
     }
 
-    private void OnGenerateByOutline()
+    // ── Helpers ────────────────────────────────────────────────────────────
+
+    private static List<List<SectionBatchItem>> BuildSectionBatches(
+        List<SectionBatchItem> pending, int charBudget)
     {
-        // TODO: Detect PDF sections automatically and generate questions per section
+        var batches      = new List<List<SectionBatchItem>>();
+        var current      = new List<SectionBatchItem>();
+        var currentChars = 0;
+
+        foreach (var item in pending)
+        {
+            var itemChars = item.Pages.Sum(p => p.Text.Length) + item.SectionTitle.Length + 200;
+            if (current.Count > 0 && currentChars + itemChars > charBudget)
+            {
+                batches.Add(current);
+                current      = new();
+                currentChars = 0;
+            }
+            current.Add(item);
+            currentChars += itemChars;
+        }
+
+        if (current.Count > 0)
+            batches.Add(current);
+
+        return batches;
+    }
+
+    private static int InferQuestionCount(int pageCount) => pageCount switch
+    {
+        <= 1  => 1,
+        <= 3  => 2,
+        <= 5  => 3,
+        <= 8  => 4,
+        <= 12 => 5,
+        <= 18 => 6,
+        <= 25 => 7,
+        _     => 8
+    };
+
+    private void SetGenerating(bool active)
+    {
+        isGenerating = active;
+        if (!active) genProgress = 0;
     }
 }

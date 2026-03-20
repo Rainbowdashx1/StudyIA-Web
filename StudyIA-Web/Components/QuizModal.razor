@@ -1,4 +1,5 @@
 @* Modal: Evaluación (Quiz) — mirrors QuizWindow.xaml *@
+@inject AppDatabase Db
 
 <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
      @onclick="HandleBackdropClick">
@@ -187,57 +188,190 @@
 
 @code {
     [Parameter] public TemarioModel? SelectedTemario { get; set; }
-    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback OnClose         { get; set; }
 
-    // ── Quiz state ──
-    private bool showResults = false;
-    private string progressText = string.Empty;
-    private int quizProgress = 0;
-    private string sourceText = string.Empty;
-    private string questionText = string.Empty;
-    private string answerText = string.Empty;
-    private bool isEvaluating = false;
-    private bool showFeedback = false;
-    private int currentScore = 0;
-    private string feedbackText = string.Empty;
-    private bool isLastQuestion = false;
+    // ── Quiz state ─────────────────────────────────────────────────────────
+    private bool   showResults    = false;
+    private string progressText   = string.Empty;
+    private int    quizProgress   = 0;
+    private string sourceText     = string.Empty;
+    private string questionText   = string.Empty;
+    private string answerText     = string.Empty;
+    private bool   isEvaluating   = false;
+    private bool   showFeedback   = false;
+    private int    currentScore   = 0;
+    private string feedbackText   = string.Empty;
+    private bool   isLastQuestion = false;
 
-    // ── Results state ──
-    private List<QuizResultModel> quizResults = new();
-    private int averageScore = 0;
+    // ── Results state ──────────────────────────────────────────────────────
+    private List<QuizResultModel> quizResults  = new();
+    private int                   averageScore = 0;
+
+    // ── Internal ───────────────────────────────────────────────────────────
+    private List<QuestionRecord>       _questions = new();
+    private readonly List<AttemptData> _attempts  = new();
+    private int                        _current   = 0;
+    private CancellationTokenSource?   _cts;
+    private CopilotService?            _copilot;
+
+    private const string KeyGithubToken = "GithubToken";
+
+    // ── Ciclo de vida ──────────────────────────────────────────────────────
+
+    protected override void OnParametersSet()
+    {
+        if (SelectedTemario is null) return;
+
+        var token = Db.GetSetting(KeyGithubToken);
+        _copilot = !string.IsNullOrEmpty(token) ? new CopilotService(token) : null;
+
+        _questions = Db.GetAllQuestionsForFolder(SelectedTemario.FolderPath);
+        _attempts.Clear();
+        _current    = 0;
+        showResults = false;
+
+        if (_questions.Count == 0)
+        {
+            questionText = "No hay preguntas disponibles. Genera preguntas primero desde '📝 Preguntas'.";
+            progressText = "0 preguntas";
+            sourceText   = string.Empty;
+            return;
+        }
+
+        ShowQuestion(0);
+    }
+
+    // ── Mostrar pregunta ───────────────────────────────────────────────────
+
+    private void ShowQuestion(int index)
+    {
+        var q = _questions[index];
+
+        progressText   = $"Pregunta {index + 1} de {_questions.Count}";
+        quizProgress   = (int)((double)index / _questions.Count * 100);
+        sourceText     = $"📄 {q.FileName}  ·  Página {q.PageNumber}";
+        questionText   = q.QuestionText;
+        answerText     = string.Empty;
+        isEvaluating   = false;
+        showFeedback   = false;
+        isLastQuestion = index == _questions.Count - 1;
+    }
+
+    // ── Handlers ──────────────────────────────────────────────────────────
 
     private async Task HandleBackdropClick()
     {
-        await OnClose.InvokeAsync();
-    }
-
-    private void OnAnswer()
-    {
-        // TODO: Send current question + answerText to AI for evaluation,
-        //       then populate currentScore, feedbackText and set showFeedback = true
+        if (!isEvaluating)
+            await OnClose.InvokeAsync();
     }
 
     private async Task OnAnswerKeyDown(KeyboardEventArgs e)
     {
-        // TODO: Submit on Ctrl+Enter (e.CtrlKey && e.Key == "Enter")
-        await Task.CompletedTask;
+        if (e.CtrlKey && e.Key == "Enter")
+            await OnAnswer();
+    }
+
+    private async Task OnAnswer()
+    {
+        if (_questions.Count == 0) return;
+        var answer = answerText.Trim();
+        if (string.IsNullOrWhiteSpace(answer)) return;
+
+        isEvaluating = true;
+        showFeedback = false;
+        StateHasChanged();
+
+        var q        = _questions[_current];
+        var score    = 0;
+        var feedback = string.Empty;
+
+        _cts = new CancellationTokenSource();
+        try
+        {
+            if (_copilot is null)
+            {
+                feedback = "⚠️ Sin token configurado. Configura tu GitHub PAT en '📝 Preguntas'.";
+            }
+            else
+            {
+                (score, feedback) = await _copilot.EvaluateAnswerAsync(
+                    q.QuestionText, q.ExpectedAnswer, answer, _cts.Token);
+            }
+        }
+        catch (OperationCanceledException) { return; }
+        catch (Exception ex)
+        {
+            feedback = $"Error al evaluar: {ex.Message}";
+        }
+        finally
+        {
+            _cts?.Dispose();
+            _cts         = null;
+            isEvaluating = false;
+        }
+
+        await Db.SaveUserAnswerAsync(q.Id, answer, score / 100.0, feedback);
+        _attempts.Add(new AttemptData(q, answer, score, feedback));
+
+        currentScore = score;
+        feedbackText = feedback;
+        showFeedback = true;
     }
 
     private void OnNext()
     {
-        // TODO: If isLastQuestion → set showResults = true and build quizResults list
-        //       Otherwise → advance to next question and reset answer/feedback state
+        if (_current < _questions.Count - 1)
+        {
+            _current++;
+            ShowQuestion(_current);
+        }
+        else
+        {
+            ShowResults();
+        }
     }
 
-    // ── Helpers ──
+    // ── Resultados ────────────────────────────────────────────────────────
 
-    private string ScoreBadgeClass(int score) =>
-        score >= 8 ? "bg-green-600" :
-        score >= 5 ? "bg-yellow-500" :
-                     "bg-red-500";
+    private void ShowResults()
+    {
+        averageScore = _attempts.Count > 0
+            ? (int)Math.Round(_attempts.Average(a => a.Score))
+            : 0;
 
-    private string ScoreTextClass(int score) =>
-        score >= 8 ? "text-green-700" :
-        score >= 5 ? "text-yellow-600" :
-                     "text-red-600";
+        quizResults = _attempts
+            .Select((a, i) => new QuizResultModel
+            {
+                Number       = i + 1,
+                Question     = TrimText(a.Q.QuestionText, 90),
+                UserAnswer   = TrimText(a.Answer,          90),
+                Score        = a.Score,
+                ScoreDisplay = $"{a.Score} / 100",
+                Feedback     = a.Feedback
+            })
+            .ToList();
+
+        showResults = true;
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────
+
+    private static string TrimText(string s, int max) =>
+        s.Length <= max ? s : s[..max] + "…";
+
+    private static string ScoreBadgeClass(int score) =>
+        score >= 80 ? "bg-green-600" :
+        score >= 60 ? "bg-yellow-500" :
+                      "bg-red-500";
+
+    private static string ScoreTextClass(int score) =>
+        score >= 80 ? "text-green-700" :
+        score >= 60 ? "text-yellow-600" :
+                      "text-red-600";
+
+    private record AttemptData(
+        QuestionRecord Q,
+        string         Answer,
+        int            Score,
+        string         Feedback);
 }

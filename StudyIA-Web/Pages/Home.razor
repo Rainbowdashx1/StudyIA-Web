@@ -1,4 +1,7 @@
 ﻿@page "/"
+@implements IDisposable
+@inject AppDatabase Db
+@inject IJSRuntime JS
 
 <PageTitle>StudyIA</PageTitle>
 
@@ -45,6 +48,32 @@
                 🗑 Eliminar
             </button>
         </div>
+
+        @* Hidden folder picker input *@
+        <input id="folderPickerInput" type="file" accept=".pdf"
+               multiple webkitdirectory style="display:none" />
+
+        @* Confirm remove *@
+        @if (showConfirmRemove && selectedTemario is not null)
+        {
+            <div class="bg-red-50 border-t border-red-200 px-2 py-2 flex flex-col gap-1.5">
+                <span class="text-xs text-red-700 font-medium">
+                    ¿Eliminar "@selectedTemario.Name"?
+                </span>
+                <div class="flex gap-1">
+                    <button class="flex-1 h-6 text-xs rounded bg-red-600 text-white
+                                   hover:bg-red-700 transition-colors"
+                            @onclick="ConfirmRemoveFolder">
+                        Sí, eliminar
+                    </button>
+                    <button class="flex-1 h-6 text-xs border border-gray-300 rounded bg-white
+                                   hover:bg-gray-50 transition-colors"
+                            @onclick='() => showConfirmRemove = false'>
+                        Cancelar
+                    </button>
+                </div>
+            </div>
+        }
 
     </div>
 
@@ -170,51 +199,216 @@
 }
 
 @code {
-    private List<TemarioModel> temarios = new();
-    private TemarioModel? selectedTemario;
-    private List<PdfFileModel> pdfFiles = new();
-    private string statusText = "Listo";
-    private bool isScanning = false;
-    private bool showQuestionsModal = false;
-    private bool showQuizModal = false;
+    private List<TemarioModel> temarios      = new();
+    private TemarioModel?      selectedTemario;
+    private List<PdfFileModel> pdfFiles      = new();
+    private string             statusText    = "Listo";
+    private bool               isScanning         = false;
+    private bool               showQuestionsModal  = false;
+    private bool               showQuizModal       = false;
+    private bool               showConfirmRemove   = false;
+    private DotNetObjectReference<Home>? _dotNetRef;
 
-    private void OnTemarioSelected(TemarioModel temario)
+    protected override async Task OnInitializedAsync()
     {
-        // TODO: Set selectedTemario and load PDF files for the selected folder
+        await Db.InitializeAsync();
+        await LoadAllFoldersAsync(autoSelectFirst: true);
     }
 
-    private void OnAddFolder()
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        // TODO: Open folder picker and add a new TemarioModel to the list
+        if (firstRender)
+        {
+            _dotNetRef = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("folderPicker.init", "folderPickerInput", _dotNetRef);
+        }
     }
+
+    public void Dispose() => _dotNetRef?.Dispose();
+
+    // ── Temarios ───────────────────────────────────────────────────────────
+
+    private async Task LoadAllFoldersAsync(bool autoSelectFirst = false)
+    {
+        var records = Db.GetAllFolders();
+        temarios = records.Select(f => new TemarioModel
+        {
+            Id         = f.Id,
+            Name       = f.Name,
+            FolderPath = f.FolderPath
+        }).ToList();
+
+        if (autoSelectFirst && selectedTemario is null && temarios.Count > 0)
+            await OnTemarioSelected(temarios[0]);
+    }
+
+    private async Task OnTemarioSelected(TemarioModel temario)
+    {
+        selectedTemario   = temario;
+        showConfirmRemove = false;
+        await ScanFolderAsync();
+    }
+
+    // ── Añadir temario ─────────────────────────────────────────────────────
+
+    private async Task OnAddFolder()
+    {
+        showConfirmRemove = false;
+        await JS.InvokeVoidAsync("folderPicker.open", "folderPickerInput");
+    }
+
+    // Called from JS via DotNetObjectReference — avoids passing the FileList through Blazor's
+    // event system which crashes the debug proxy when webkitdirectory selects many files.
+    [JSInvokable]
+    public async Task OnFolderSelectedCallback()
+    {
+        await OnFolderSelectedAsync();
+        StateHasChanged();
+    }
+
+    private async Task OnFolderSelectedAsync()
+    {
+        // Obtener la lista de archivos seleccionados vía JS
+        var files = await JS.InvokeAsync<List<JsFileInfo>>("folderPicker.getFileList", "folderPickerInput");
+        if (files == null || files.Count == 0) return;
+
+        // El nombre de la carpeta raíz viene en la primera parte del relativePath: "carpeta/archivo.pdf"
+        var folderName = files[0].RelativePath.Split('/')[0];
+        // Usamos el folderName como identificador virtual de la carpeta
+        var folderPath = folderName;
+
+        await Db.AddFolderAsync(folderName, folderPath);
+        await LoadAllFoldersAsync();
+
+        var added = temarios.FirstOrDefault(t => t.FolderPath == folderPath);
+        if (added is not null)
+            await OnTemarioSelected(added);
+    }
+
+    // ── Eliminar temario ───────────────────────────────────────────────────
 
     private void OnRemoveFolder()
     {
-        // TODO: Remove selectedTemario from the list
+        if (selectedTemario is null) return;
+        showConfirmRemove = true;
     }
 
-    private void OnScan()
+    private async Task ConfirmRemoveFolder()
     {
-        // TODO: Scan the selected folder for PDF files and update pdfFiles
+        if (selectedTemario is null) return;
+
+        await Db.DeleteFolderAsync(selectedTemario.Id);
+        selectedTemario   = null;
+        showConfirmRemove = false;
+        pdfFiles.Clear();
+        statusText = "Listo";
+
+        await LoadAllFoldersAsync();
     }
 
-    private void OnOpenQuestions()
+    // ── Escanear ───────────────────────────────────────────────────────────
+
+    private async Task OnScan() => await ScanFolderAsync();
+
+    private async Task ScanFolderAsync()
     {
-        showQuestionsModal = true;
+        if (selectedTemario is null) return;
+
+        var folderPath = selectedTemario.FolderPath;
+
+        // Obtener los archivos PDF del input que corresponden a esta carpeta
+        var allFiles = await JS.InvokeAsync<List<JsFileInfo>>("folderPicker.getFileList", "folderPickerInput");
+        var pdfs = allFiles
+            .Where(f => f.RelativePath.Split('/')[0] == folderPath
+                     && f.Name.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (pdfs.Count == 0)
+        {
+            pdfFiles.Clear();
+            statusText = "No se encontraron archivos PDF. Selecciona la carpeta con el botón Añadir.";
+            return;
+        }
+
+        isScanning = true;
+        statusText = "Escaneando...";
+        StateHasChanged();
+
+        var results = new List<PdfFileModel>();
+        try
+        {
+            for (var i = 0; i < pdfs.Count; i++)
+            {
+                var file = pdfs[i];
+                statusText = $"Procesando {file.Name}  ({i + 1}/{pdfs.Count})...";
+                StateHasChanged();
+                var result = await ProcessPdfAsync(file, folderPath);
+                results.Add(result);
+            }
+
+            pdfFiles = results;
+
+            var newCount      = results.Count(r => r.RawStatus == PdfStatus.New);
+            var modifiedCount = results.Count(r => r.RawStatus == PdfStatus.Modified);
+            statusText = $"{results.Count} PDF(s) escaneado(s)" +
+                         (newCount      > 0 ? $"  -  {newCount} nuevo(s)"           : "") +
+                         (modifiedCount > 0 ? $"  -  {modifiedCount} modificado(s)" : "") +
+                         ".";
+        }
+        catch (Exception ex)
+        {
+            statusText = $"Error al escanear: {ex.Message}";
+        }
+        finally
+        {
+            isScanning = false;
+        }
     }
 
-    private void OnPractice()
+    private async Task<PdfFileModel> ProcessPdfAsync(JsFileInfo file, string folderPath)
     {
-        showQuizModal = true;
+        try
+        {
+            // Fingerprint basado en metadatos (nombre + tamaño + lastModified).
+            // Leer el contenido completo de cada PDF vía JSInterop agota el heap de WASM
+            // (cada PDF grande genera decenas de MB de string base64 + bytes decodificados),
+            // lo que provoca que el proceso de debug termine con código -1.
+            var metaBytes   = System.Text.Encoding.UTF8.GetBytes(
+                                  $"{file.Name}|{file.Size}|{file.LastModified}");
+            var fingerprint = Convert.ToHexString(SHA256.HashData(metaBytes));
+            var fileSize    = file.Size;
+
+            var storedHash = Db.GetStoredHash(file.Name + "|" + folderPath);
+            var status = storedHash is null
+                       ? PdfStatus.New
+                       : storedHash == fingerprint ? PdfStatus.Unchanged
+                                                   : PdfStatus.Modified;
+
+            await Db.UpsertPdfFileAsync(folderPath, file.Name + "|" + folderPath,
+                                        file.Name, fingerprint, fileSize);
+            return new PdfFileModel(file.Name, fileSize, fingerprint, status);
+        }
+        catch (Exception ex)
+        {
+            return new PdfFileModel(file.Name, 0, string.Empty, PdfStatus.New, ex.Message);
+        }
     }
 
-    private void OnQuizModalClose()
-    {
-        showQuizModal = false;
-    }
+    // ── Modales ────────────────────────────────────────────────────────────
 
-    private void OnQuestionsModalClose()
+    private void OnOpenQuestions() => showQuestionsModal = true;
+    private void OnPractice()      => showQuizModal      = true;
+    private void OnQuizModalClose()      => showQuizModal      = false;
+    private void OnQuestionsModalClose() => showQuestionsModal = false;
+
+    // ── JS interop types ───────────────────────────────────────────────────
+
+    private sealed class JsFileInfo
     {
-        showQuestionsModal = false;
+        public int    Index        { get; set; }
+        public string Name         { get; set; } = string.Empty;
+        public string RelativePath { get; set; } = string.Empty;
+        public long   Size         { get; set; }
+        public long   LastModified { get; set; }
     }
 }
